@@ -66,7 +66,12 @@ func validContentType(ct string) bool {
 }
 
 func (s *stormImages) Insert(url string) (*Image, error) {
-	resp, err := http.Get(url)
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
