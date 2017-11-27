@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"html/template"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/Xe/kinq/internal/database"
 	"github.com/Xe/kinq/internal/discord"
@@ -67,7 +69,7 @@ func main() {
 		ClientSecret: cfg.DiscordOAuth2ClientSecret,
 		Endpoint:     discord.Endpoint,
 		RedirectURL:  cfg.DiscordOAuth2RedirectURL,
-		Scopes:       []string{"email"},
+		Scopes:       []string{"email", "identify", "guilds"},
 	}
 
 	s := &site{
@@ -77,6 +79,8 @@ func main() {
 		db:     db,
 		dg:     dg,
 		i:      i,
+
+		templates: map[string]*template.Template{},
 	}
 
 	dg.AddHandler(s.messageCreate)
@@ -94,8 +98,18 @@ func main() {
 	r.Get("/login", s.login)
 	r.Get("/login/redirect", s.redirect)
 
+	r.Route("/images", func(r chi.Router) {
+		r.Use(s.isLoggedIn)
+
+		r.Get("/", s.renderTemplatePage("index.html", nil).ServeHTTP)
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/static/", http.FileServer(http.Dir(".")))
+	mux.Handle("/", r)
+
 	ln.Log(ctx, ln.Action("serving http"), ln.F{"port": cfg.Port})
-	http.ListenAndServe(":"+cfg.Port, r)
+	http.ListenAndServe(":"+cfg.Port, mux)
 }
 
 type site struct {
@@ -105,10 +119,14 @@ type site struct {
 	db     *storm.DB
 	dg     *discordgo.Session
 	i      database.Images
+
+	tlock     sync.RWMutex
+	templates map[string]*template.Template
 }
 
 type sessionData struct {
-	ID string
+	ID   string
+	Code string
 }
 
 func (s *site) isLoggedIn(next http.Handler) http.Handler {
@@ -168,6 +186,6 @@ func (s *site) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *site) redirect(w http.ResponseWriter, r *http.Request) {
-	session.Set(w, &sessionData{ID: uuid.New()}, s.scfg)
+	session.Set(w, &sessionData{ID: uuid.New(), Code: r.URL.Query().Get("code")}, s.scfg)
 	http.Redirect(w, r, "/images", http.StatusTemporaryRedirect)
 }

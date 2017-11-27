@@ -37,6 +37,7 @@ type Images interface {
 	AddTags(id string, tags []string) error
 	RemoveTags(id string, tags []string) error
 	Search(numPerPage, pageNumber int, tags []string) ([]Image, error)
+	Untagged() ([]Image, error)
 	Delete(id string) error
 }
 
@@ -143,6 +144,17 @@ func (s *stormImages) Search(numPerPage, pageNumber int, tags []string) ([]Image
 	query.Limit(numPerPage)
 	query.Skip(pageNumber * numPerPage)
 
+	var images []Image
+	err := query.Find(&images)
+	if err != nil {
+		return nil, err
+	}
+
+	return images, nil
+}
+
+func (s *stormImages) Untagged() ([]Image, error) {
+	query := s.db.Select(q.Eq("Tags", []string{}))
 	var images []Image
 	err := query.Find(&images)
 	if err != nil {

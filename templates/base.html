@@ -1,0 +1,46 @@
+<html>
+    <head>
+        {{ template "title" . }}
+        <link rel="stylesheet" href="/static/css/hack.css" />
+        <link rel="stylesheet" href="/static/css/solarized-dark.css" />
+
+        <style>
+         .main {
+             padding: 20px 10px;
+         }
+
+         .hack h1 {
+             padding-top: 0;
+         }
+
+         footer.footer {
+             border-top: 1px solid #ccc;
+             margin-top: 80px;
+             margin-top: 5rem;
+             padding: 48px 0;
+             padding: 3rem 0;
+         }
+
+         img {
+             max-width: 100%;
+             padding: 1em;
+         }
+        </style>
+        {{ template "styles" . }}
+    </head>
+    <body class="hack solarized-dark">
+        {{ template "scripts" . }}
+        <div class="container">
+            <header>
+                <p><a href="/images/">kinq</a> - <a href="/images/search">Search</a> - <a href="/images/untagged">Untagged</a></p>
+            </header>
+            {{ template "content" . }}
+            <footer>
+                <blockquote>Copyright the artists who uploaded these images to the site they were uploaded to. This site is private and as such may feature content otherwise blocked behind paywalls.</blockquote>
+            </footer>
+        </div>
+    </body>
+</html>
+
+{{ define "scripts" }}{{ end }}
+{{ define "styles" }}{{ end }}
