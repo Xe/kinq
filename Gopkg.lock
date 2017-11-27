@@ -4,8 +4,8 @@
 [[projects]]
   name = "github.com/Xe/derpigo"
   packages = ["."]
-  revision = "31851625bd34932e212a2cdbbc728194d69bf225"
-  version = "1.0.2"
+  revision = "925661ba5336823aaa2de54779e6d5795c88addf"
+  version = "1.0.3"
 
 [[projects]]
   name = "github.com/Xe/ln"
