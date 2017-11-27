@@ -10,6 +10,7 @@ import (
 	"github.com/Xe/kinq/internal/database"
 	"github.com/Xe/kinq/internal/discord"
 	"github.com/Xe/kinq/internal/ksecretbox"
+	"github.com/Xe/kinq/internal/linkscraper"
 	"github.com/Xe/ln"
 	"github.com/Xe/uuid"
 	"github.com/asdine/storm"
@@ -28,9 +29,13 @@ type config struct {
 	DBPath                    string `env:"DB_PATH,required"`
 	DiscordKey                string `env:"DISCORD_KEY,required"`
 	DiscordMonitorChannel     string `env:"DISCORD_MONITOR_CHANNEL,required"`
+	DiscordMustGuild          string `env:"DISCORD_MUST_GUILD,required"`
 	DiscordOAuth2ClientID     string `env:"DISCORD_OAUTH2_CLIENT_ID,required"`
 	DiscordOAuth2ClientSecret string `env:"DISCORD_OAUTH2_CLIENT_SECRET,required"`
 	DiscordOAuth2RedirectURL  string `env:"DISCORD_OAUTH2_REDIRECT_URL,required"`
+
+	E621APIKey       string `env:"E621_API_KEY,required"`
+	DerpibooruAPIKey string `env:"DERPIBOORU_API_KEY,required"`
 }
 
 func main() {
@@ -51,7 +56,12 @@ func main() {
 		ln.FatalErr(ctx, err)
 	}
 
-	i := database.NewStormImages(db)
+	rs := &linkscraper.Rules{
+		linkscraper.NewDerpiDirectScraper(cfg.DerpibooruAPIKey),
+		linkscraper.NewDerpiCDNScraper(cfg.DerpibooruAPIKey),
+	}
+
+	i := database.NewStormImages(db, rs)
 
 	skey, err := ksecretbox.ParseKey(cfg.SecretBoxKey)
 	if err != nil {
@@ -95,6 +105,7 @@ func main() {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 
+	r.Get("/", s.login)
 	r.Get("/login", s.login)
 	r.Get("/login/redirect", s.redirect)
 
@@ -102,6 +113,8 @@ func main() {
 		r.Use(s.isLoggedIn)
 
 		r.Get("/", s.renderTemplatePage("index.html", nil).ServeHTTP)
+		r.Get("/recent", s.recent)
+		r.Get("/id/{id}", s.one)
 	})
 
 	mux := http.NewServeMux()
@@ -186,6 +199,46 @@ func (s *site) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *site) redirect(w http.ResponseWriter, r *http.Request) {
-	session.Set(w, &sessionData{ID: uuid.New(), Code: r.URL.Query().Get("code")}, s.scfg)
+	c := r.URL.Query().Get("code")
+
+	session.Set(w, &sessionData{ID: uuid.New(), Code: c}, s.scfg)
 	http.Redirect(w, r, "/images", http.StatusTemporaryRedirect)
+}
+
+func (s *site) recent(w http.ResponseWriter, r *http.Request) {
+	is, err := s.i.Recent()
+	if err != nil {
+		ln.Error(r.Context(), err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := struct {
+		Subtitle string
+		Images   []database.Image
+	}{
+		Subtitle: "recent images",
+		Images:   is,
+	}
+
+	s.renderTemplatePage("imagelist.html", &data).ServeHTTP(w, r)
+}
+
+func (s *site) one(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	u := uuid.Parse(id)
+	if u == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	i, err := s.i.One(id)
+	if err != nil {
+		ln.Error(r.Context(), err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.renderTemplatePage("image.html", i).ServeHTTP(w, r)
 }

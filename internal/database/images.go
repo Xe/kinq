@@ -1,12 +1,15 @@
 package database
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"time"
 
+	"github.com/Xe/kinq/internal/linkscraper"
 	"github.com/Xe/ln"
 	"github.com/Xe/uuid"
 	"github.com/asdine/storm"
@@ -15,8 +18,9 @@ import (
 )
 
 type Image struct {
-	ID         string `storm:"id"`
-	URL        string `storm:"unique"`
+	ID         string    `storm:"id"`
+	URL        string    `storm:"unique"`
+	Added      time.Time `storm:"index"`
 	Tags       []string
 	Blake2Hash string
 	Size       int64
@@ -25,28 +29,31 @@ type Image struct {
 
 func (i Image) F() ln.F {
 	return ln.F{
-		"image_id":      i.ID,
-		"image_url":     i.URL,
-		"image_hash":    i.Blake2Hash,
-		"image_deleted": i.Deleted,
+		"image_id":        i.ID,
+		"image_url":       i.URL,
+		"image_hash":      i.Blake2Hash,
+		"image_deleted":   i.Deleted,
+		"image_tag_count": len(i.Tags),
 	}
 }
 
 type Images interface {
 	Insert(url string) (*Image, error)
+	One(id string) (*Image, error)
 	AddTags(id string, tags []string) error
 	RemoveTags(id string, tags []string) error
 	Search(numPerPage, pageNumber int, tags []string) ([]Image, error)
-	Untagged() ([]Image, error)
+	Recent() ([]Image, error)
 	Delete(id string) error
 }
 
 type stormImages struct {
 	db *storm.DB
+	r  *linkscraper.Rules
 }
 
-func NewStormImages(db *storm.DB) Images {
-	return &stormImages{db: db}
+func NewStormImages(db *storm.DB, r *linkscraper.Rules) Images {
+	return &stormImages{db: db, r: r}
 }
 
 func validContentType(ct string) bool {
@@ -83,11 +90,18 @@ func (s *stormImages) Insert(url string) (*Image, error) {
 
 	id := uuid.New()
 
+	tags, err := s.r.Test(context.Background(), url)
+	if err != nil && err != linkscraper.ErrNotFound {
+		ln.Error(context.Background(), err, ln.Action("scrape for tags"))
+	}
+
 	i := &Image{
 		ID:         id,
 		URL:        url,
+		Added:      time.Now(),
 		Blake2Hash: strhsh,
 		Size:       int64(len(data)),
+		Tags:       tags,
 	}
 
 	err = s.db.Save(i)
@@ -96,6 +110,16 @@ func (s *stormImages) Insert(url string) (*Image, error) {
 	}
 
 	return i, nil
+}
+
+func (s *stormImages) One(id string) (*Image, error) {
+	var i Image
+	err := s.db.One("ID", id, &i)
+	if err != nil {
+		return nil, err
+	}
+
+	return &i, nil
 }
 
 func (s *stormImages) AddTags(id string, tags []string) error {
@@ -153,10 +177,9 @@ func (s *stormImages) Search(numPerPage, pageNumber int, tags []string) ([]Image
 	return images, nil
 }
 
-func (s *stormImages) Untagged() ([]Image, error) {
-	query := s.db.Select(q.Eq("Tags", []string{}))
+func (s *stormImages) Recent() ([]Image, error) {
 	var images []Image
-	err := query.Find(&images)
+	err := s.db.AllByIndex("Added", &images)
 	if err != nil {
 		return nil, err
 	}

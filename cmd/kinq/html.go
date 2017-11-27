@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"time"
 
@@ -29,7 +29,11 @@ func (s *site) renderTemplatePage(templateFname string, data interface{}) http.H
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				ln.Error(context.Background(), err, ln.F{"action": "renderTemplatePage", "page": templateFname})
-				fmt.Fprintf(w, "error: %v", err)
+				return
+			}
+
+			if t == nil && err == nil {
+				log.Fatal("???")
 			}
 
 			ln.Log(context.Background(), ln.F{"action": "loaded_new_template", "fname": templateFname})
@@ -41,6 +45,10 @@ func (s *site) renderTemplatePage(templateFname string, data interface{}) http.H
 			s.tlock.RLock()
 		} else {
 			t = s.templates[templateFname]
+		}
+
+		if t == nil {
+			panic("this shouldn't happen")
 		}
 
 		err = t.Execute(w, data)
