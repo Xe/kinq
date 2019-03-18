@@ -1,7 +1,7 @@
 {{ define "title" }}<title>kinq - {{ .ID }} - {{ .Added }}</title>{{ end }}
 
 {{ define "content" }}
-    <img src="{{ .URL }}" width="100%">
+    <img src="/images/id/{{ .ID }}/img" width="100%">
 
     <b>raw url: <a href="{{ .URL }}">{{ .URL }}</a></b>
     <h5>posted on {{ .Added }}</h5>

@@ -4,35 +4,37 @@ import (
 	"context"
 	"html/template"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Xe/kinq/internal/database"
 	"github.com/Xe/kinq/internal/discord"
 	"github.com/Xe/kinq/internal/ksecretbox"
 	"github.com/Xe/kinq/internal/linkscraper"
-	"github.com/Xe/ln"
-	"github.com/Xe/uuid"
-	"github.com/asdine/storm"
+	"github.com/asdine/storm/v2"
 	"github.com/bwmarrin/discordgo"
 	"github.com/caarlos0/env"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/kr/session"
+	"github.com/rs/xid"
 	"golang.org/x/oauth2"
 	chi "gopkg.in/chi.v3"
 	"gopkg.in/chi.v3/middleware"
+	"within.website/ln"
 )
 
 type config struct {
-	Port                      string `env:"PORT" envDefault:"9001"`
-	SecretBoxKey              string `env:"SECRET_BOX_KEY,required"`
-	DBPath                    string `env:"DB_PATH,required"`
-	DiscordKey                string `env:"DISCORD_KEY,required"`
-	DiscordMonitorChannel     string `env:"DISCORD_MONITOR_CHANNEL,required"`
-	DiscordMustGuild          string `env:"DISCORD_MUST_GUILD,required"`
-	DiscordOAuth2ClientID     string `env:"DISCORD_OAUTH2_CLIENT_ID,required"`
-	DiscordOAuth2ClientSecret string `env:"DISCORD_OAUTH2_CLIENT_SECRET,required"`
-	DiscordOAuth2RedirectURL  string `env:"DISCORD_OAUTH2_REDIRECT_URL,required"`
+	Port                      string   `env:"PORT" envDefault:"9001"`
+	SecretBoxKey              string   `env:"SECRET_BOX_KEY,required"`
+	DBPath                    string   `env:"DB_PATH,required"`
+	DiscordKey                string   `env:"DISCORD_KEY,required"`
+	DiscordMonitorChannels    []string `env:"DISCORD_MONITOR_CHANNELS,required"`
+	DiscordMustGuild          string   `env:"DISCORD_MUST_GUILD,required"`
+	DiscordOAuth2ClientID     string   `env:"DISCORD_OAUTH2_CLIENT_ID,required"`
+	DiscordOAuth2ClientSecret string   `env:"DISCORD_OAUTH2_CLIENT_SECRET,required"`
+	DiscordOAuth2RedirectURL  string   `env:"DISCORD_OAUTH2_REDIRECT_URL,required"`
 
 	E621APIKey       string `env:"E621_API_KEY,required"`
 	DerpibooruAPIKey string `env:"DERPIBOORU_API_KEY,required"`
@@ -115,6 +117,7 @@ func main() {
 		r.Get("/", s.renderTemplatePage("index.html", nil).ServeHTTP)
 		r.Get("/recent", s.recent)
 		r.Get("/id/{id}", s.one)
+		r.Get("/id/{id}/img", s.image)
 	})
 
 	mux := http.NewServeMux()
@@ -160,7 +163,14 @@ func (s *site) messageCreate(ds *discordgo.Session, mc *discordgo.MessageCreate)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if mc.ChannelID != s.cfg.DiscordMonitorChannel {
+	found := false
+	for _, id := range s.cfg.DiscordMonitorChannels {
+		if id == mc.ChannelID {
+			found = true
+		}
+	}
+
+	if !found {
 		return
 	}
 
@@ -194,31 +204,46 @@ func (s *site) messageCreate(ds *discordgo.Session, mc *discordgo.MessageCreate)
 }
 
 func (s *site) login(w http.ResponseWriter, r *http.Request) {
-	u := s.oa2cfg.AuthCodeURL(uuid.New())
+	u := s.oa2cfg.AuthCodeURL(xid.New().String())
 	http.Redirect(w, r, u, http.StatusTemporaryRedirect)
 }
 
 func (s *site) redirect(w http.ResponseWriter, r *http.Request) {
 	c := r.URL.Query().Get("code")
 
-	session.Set(w, &sessionData{ID: uuid.New(), Code: c}, s.scfg)
+	session.Set(w, &sessionData{ID: xid.New().String(), Code: c}, s.scfg)
 	http.Redirect(w, r, "/images", http.StatusTemporaryRedirect)
 }
 
 func (s *site) recent(w http.ResponseWriter, r *http.Request) {
-	is, err := s.i.Recent()
+	var pageID string
+	keys, ok := r.URL.Query()["page"]
+	if ok {
+		pageID = keys[0]
+	}
+	i, _ := strconv.Atoi(pageID)
+	is, err := s.i.Recent(i)
 	if err != nil {
 		ln.Error(r.Context(), err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	next := r.URL.Query()
+	next.Set("page", strconv.Itoa(i+1))
+	prev := r.URL.Query()
+	prev.Set("page", strconv.Itoa(i-1))
+
 	data := struct {
 		Subtitle string
 		Images   []database.Image
+		NextURL  string
+		PrevURL  string
 	}{
 		Subtitle: "recent images",
 		Images:   is,
+		NextURL:  r.URL.Path + "?" + next.Encode(),
+		PrevURL:  r.URL.Path + "?" + prev.Encode(),
 	}
 
 	s.renderTemplatePage("imagelist.html", &data).ServeHTTP(w, r)
@@ -226,12 +251,6 @@ func (s *site) recent(w http.ResponseWriter, r *http.Request) {
 
 func (s *site) one(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-
-	u := uuid.Parse(id)
-	if u == nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
 
 	i, err := s.i.One(id)
 	if err != nil {
@@ -241,4 +260,38 @@ func (s *site) one(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderTemplatePage("image.html", i).ServeHTTP(w, r)
+}
+
+func (s *site) image(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	i, err := s.i.One(id)
+	if err != nil {
+		ln.Error(r.Context(), err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if len(i.Data) == 0 {
+		i, err = s.i.Insert(i.URL)
+		if err != nil {
+			ln.Error(r.Context(), err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	etag := "W/" + i.Blake2Hash
+
+	if match := r.Header.Get("If-None-Match"); match != "" {
+		if strings.Contains(match, etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", i.Mime)
+	w.Header().Set("Created-At", i.Added.Format(time.RFC3339))
+	w.Header().Set("Image-Hash", i.Blake2Hash)
+	w.Header().Set("ETag", etag)
+	w.Write(i.Data)
 }

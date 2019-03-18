@@ -6,15 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/Xe/kinq/internal/linkscraper"
-	"github.com/Xe/ln"
-	"github.com/Xe/uuid"
-	"github.com/asdine/storm"
-	"github.com/asdine/storm/q"
+	"github.com/asdine/storm/v2"
+	"github.com/asdine/storm/v2/q"
+	"github.com/rs/xid"
 	"golang.org/x/crypto/blake2b"
+	"within.website/ln"
 )
 
 type Image struct {
@@ -22,9 +24,12 @@ type Image struct {
 	URL        string    `storm:"unique"`
 	Added      time.Time `storm:"index"`
 	Tags       []string
-	Blake2Hash string
+	Blake2Hash string `storm:"unique"`
 	Size       int64
 	Deleted    bool
+	Data       []byte
+	Ext        string
+	Mime       string
 }
 
 func (i Image) F() ln.F {
@@ -34,6 +39,7 @@ func (i Image) F() ln.F {
 		"image_hash":      i.Blake2Hash,
 		"image_deleted":   i.Deleted,
 		"image_tag_count": len(i.Tags),
+		"image_tags":      i.Tags,
 	}
 }
 
@@ -43,7 +49,7 @@ type Images interface {
 	AddTags(id string, tags []string) error
 	RemoveTags(id string, tags []string) error
 	Search(numPerPage, pageNumber int, tags []string) ([]Image, error)
-	Recent() ([]Image, error)
+	Recent(pageID int) ([]Image, error)
 	Delete(id string) error
 }
 
@@ -53,6 +59,7 @@ type stormImages struct {
 }
 
 func NewStormImages(db *storm.DB, r *linkscraper.Rules) Images {
+	db.ReIndex(&Image{})
 	return &stormImages{db: db, r: r}
 }
 
@@ -66,7 +73,9 @@ func validContentType(ct string) bool {
 }
 
 func (s *stormImages) Insert(url string) (*Image, error) {
-	req, err := http.NewRequest("HEAD", url, nil)
+	id := xid.New().String()
+
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -90,10 +99,10 @@ func (s *stormImages) Insert(url string) (*Image, error) {
 		return nil, err
 	}
 
+	log.Printf("%s: %d bytes", url, len(data))
+
 	hsh := blake2b.Sum256(data)
 	strhsh := base64.StdEncoding.EncodeToString(hsh[:])
-
-	id := uuid.New()
 
 	tags, err := s.r.Test(context.Background(), url)
 	if err != nil && err != linkscraper.ErrNotFound {
@@ -107,9 +116,25 @@ func (s *stormImages) Insert(url string) (*Image, error) {
 		Blake2Hash: strhsh,
 		Size:       int64(len(data)),
 		Tags:       tags,
+		Ext:        filepath.Ext(url),
+		Data:       data,
+		Mime:       resp.Header.Get("Content-Type"),
 	}
 
 	err = s.db.Save(i)
+	if err == storm.ErrAlreadyExists {
+		log.Printf("repeat: %s %v", i.URL, i.Blake2Hash)
+		var newImage Image
+		err = s.db.One("URL", i.URL, &newImage)
+		if err != nil {
+			log.Printf("????")
+			return nil, err
+		}
+		i.ID = newImage.ID
+
+		s.db.Update(i)
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -182,9 +207,9 @@ func (s *stormImages) Search(numPerPage, pageNumber int, tags []string) ([]Image
 	return images, nil
 }
 
-func (s *stormImages) Recent() ([]Image, error) {
+func (s *stormImages) Recent(pageID int) ([]Image, error) {
 	var images []Image
-	err := s.db.AllByIndex("Added", &images)
+	err := s.db.AllByIndex("Added", &images, storm.Reverse(), storm.Limit(30), storm.Skip(30 * pageID))
 	if err != nil {
 		return nil, err
 	}

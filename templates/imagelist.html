@@ -6,9 +6,12 @@
     <div class="card cell -4of12">
       <header class="card-header">{{ .Added }}</header>
       <div class="card-content">
-        <a href="/images/id/{{ .ID }}"><img src="{{ .URL }}" width="300"></a>
+        <a href="/images/id/{{ .ID }}"><img src="/images/id/{{ .ID }}/img" width="300"></a>
       </div>
     </div>
   {{ end }}
+
+  <p><a href="{{ .PrevURL }}">Prev</a> - <a href="{{ .NextURL }}">Next</a></p>
+
   </div>
 {{ end }}
