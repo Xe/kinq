@@ -59,7 +59,6 @@ type stormImages struct {
 }
 
 func NewStormImages(db *storm.DB, r *linkscraper.Rules) Images {
-	db.ReIndex(&Image{})
 	return &stormImages{db: db, r: r}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"html/template"
 	"net/http"
 	"strconv"
@@ -110,6 +111,8 @@ func main() {
 	r.Get("/", s.login)
 	r.Get("/login", s.login)
 	r.Get("/login/redirect", s.redirect)
+	r.Get("/images/id/{id}/img", s.image)
+	r.Get("/images/id/{id}/json", s.imageJSON)
 
 	r.Route("/images", func(r chi.Router) {
 		r.Use(s.isLoggedIn)
@@ -117,12 +120,12 @@ func main() {
 		r.Get("/", s.renderTemplatePage("index.html", nil).ServeHTTP)
 		r.Get("/recent", s.recent)
 		r.Get("/id/{id}", s.one)
-		r.Get("/id/{id}/img", s.image)
 	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/static/", http.FileServer(http.Dir(".")))
 	mux.Handle("/", r)
+	mux.HandleFunc("/backup", s.backup)
 
 	ln.Log(ctx, ln.Action("serving http"), ln.F{"port": cfg.Port})
 	http.ListenAndServe(":"+cfg.Port, mux)
@@ -294,4 +297,30 @@ func (s *site) image(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Image-Hash", i.Blake2Hash)
 	w.Header().Set("ETag", etag)
 	w.Write(i.Data)
+}
+
+func (s *site) imageJSON(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	i, err := s.i.One(id)
+	if err != nil {
+		ln.Error(r.Context(), err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(i)
+}
+
+func (s *site) backup(w http.ResponseWriter, r *http.Request) {
+	err := s.db.Bolt.View(func(tx *bolt.Tx) error {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="kinq.db"`)
+		w.Header().Set("Content-Length", strconv.Itoa(int(tx.Size())))
+		_, err := tx.WriteTo(w)
+		return err
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
