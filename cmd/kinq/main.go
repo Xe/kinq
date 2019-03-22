@@ -125,7 +125,6 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/static/", http.FileServer(http.Dir(".")))
 	mux.Handle("/", r)
-	mux.HandleFunc("/backup", s.backup)
 
 	ln.Log(ctx, ln.Action("serving http"), ln.F{"port": cfg.Port})
 	http.ListenAndServe(":"+cfg.Port, mux)
@@ -310,17 +309,4 @@ func (s *site) imageJSON(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(i)
-}
-
-func (s *site) backup(w http.ResponseWriter, r *http.Request) {
-	err := s.db.Bolt.View(func(tx *bolt.Tx) error {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", `attachment; filename="kinq.db"`)
-		w.Header().Set("Content-Length", strconv.Itoa(int(tx.Size())))
-		_, err := tx.WriteTo(w)
-		return err
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
 }
