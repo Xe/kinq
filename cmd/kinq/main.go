@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -132,6 +133,7 @@ func main() {
 	r.Use(ex.HTTPLog)
 
 	r.Get("/", s.login)
+	r.Get("/info", info)
 	r.Get("/login", s.login)
 	r.Get("/login/redirect", s.redirect)
 	r.Get("/images/id/{id}/img", s.image)
@@ -168,6 +170,18 @@ type site struct {
 type sessionData struct {
 	ID   string
 	Code string
+}
+
+func info(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintln(w, `This is a private site for NSFW image archival.
+
+If you see this link in your access logs, chances are that your site hosted
+content we considered important enough to save. The code for this site is at
+https://github.com/Xe/kinq. We are sorry if our honest attempt at _private_
+archival bothers you. Please contact https://christine.website/contact if you
+have any complaints or images you want removed.
+
+Be well, Creator.`)
 }
 
 func (s *site) isLoggedIn(next http.Handler) http.Handler {
