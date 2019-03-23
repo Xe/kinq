@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Xe/derpigo"
+	"within.website/derpigo"
 )
 
 type derpiDirectScraper struct {

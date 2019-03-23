@@ -3,11 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Xe/kinq/internal/database"
@@ -17,13 +15,15 @@ import (
 	"github.com/asdine/storm/v2"
 	"github.com/bwmarrin/discordgo"
 	"github.com/caarlos0/env"
+	"github.com/celrenheit/sandflake"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/kr/session"
-	"github.com/rs/xid"
+	bolt "go.etcd.io/bbolt"
 	"golang.org/x/oauth2"
 	chi "gopkg.in/chi.v3"
 	"gopkg.in/chi.v3/middleware"
 	"within.website/ln"
+	"within.website/ln/ex"
 )
 
 type config struct {
@@ -41,6 +41,27 @@ type config struct {
 	DerpibooruAPIKey string `env:"DERPIBOORU_API_KEY,required"`
 }
 
+func requestIDMiddleware(next http.Handler) http.Handler {
+	var g sandflake.Generator
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := g.Next().String()
+
+		if rid := r.Header.Get("X-Request-Id"); rid != "" {
+			id = rid + "," + id
+		}
+
+		ctx := ln.WithF(r.Context(), ln.F{
+			"request_id": id,
+		})
+		r = r.WithContext(ctx)
+
+		w.Header().Set("X-Request-Id", id)
+		r.Header.Set("X-Request-Id", id)
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	ctx := context.Background()
 	var cfg config
@@ -53,6 +74,9 @@ func main() {
 	if err != nil {
 		ln.FatalErr(ctx, err)
 	}
+
+	bl := BoltLogger(db.Bolt, "ln", ln.NewTextFormatter())
+	ln.AddFilter(bl)
 
 	dg, err := discordgo.New("Bot " + cfg.DiscordKey)
 	if err != nil {
@@ -92,8 +116,6 @@ func main() {
 		db:     db,
 		dg:     dg,
 		i:      i,
-
-		templates: map[string]*template.Template{},
 	}
 
 	dg.AddHandler(s.messageCreate)
@@ -105,8 +127,9 @@ func main() {
 
 	r := chi.NewRouter()
 
-	r.Use(middleware.RequestID)
+	r.Use(requestIDMiddleware)
 	r.Use(middleware.RealIP)
+	r.Use(ex.HTTPLog)
 
 	r.Get("/", s.login)
 	r.Get("/login", s.login)
@@ -120,6 +143,8 @@ func main() {
 		r.Get("/", s.renderTemplatePage("index.html", nil).ServeHTTP)
 		r.Get("/recent", s.recent)
 		r.Get("/id/{id}", s.one)
+		r.Get("/backup", s.backup)
+		r.Get("/logs", bl.ServeHTTP)
 	})
 
 	mux := http.NewServeMux()
@@ -137,9 +162,7 @@ type site struct {
 	db     *storm.DB
 	dg     *discordgo.Session
 	i      database.Images
-
-	tlock     sync.RWMutex
-	templates map[string]*template.Template
+	g      sandflake.Generator
 }
 
 type sessionData struct {
@@ -206,14 +229,14 @@ func (s *site) messageCreate(ds *discordgo.Session, mc *discordgo.MessageCreate)
 }
 
 func (s *site) login(w http.ResponseWriter, r *http.Request) {
-	u := s.oa2cfg.AuthCodeURL(xid.New().String())
+	u := s.oa2cfg.AuthCodeURL(s.g.Next().String())
 	http.Redirect(w, r, u, http.StatusTemporaryRedirect)
 }
 
 func (s *site) redirect(w http.ResponseWriter, r *http.Request) {
 	c := r.URL.Query().Get("code")
 
-	session.Set(w, &sessionData{ID: xid.New().String(), Code: c}, s.scfg)
+	session.Set(w, &sessionData{ID: s.g.Next().String(), Code: c}, s.scfg)
 	http.Redirect(w, r, "/images", http.StatusTemporaryRedirect)
 }
 
@@ -309,4 +332,17 @@ func (s *site) imageJSON(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(i)
+}
+
+func (s *site) backup(w http.ResponseWriter, r *http.Request) {
+	err := s.db.Bolt.View(func(tx *bolt.Tx) error {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="kinq.db"`)
+		w.Header().Set("Content-Length", strconv.Itoa(int(tx.Size())))
+		_, err := tx.WriteTo(w)
+		return err
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/Xe/kinq/internal/linkscraper"
 	"github.com/asdine/storm/v2"
 	"github.com/asdine/storm/v2/q"
-	"github.com/rs/xid"
+	"github.com/celrenheit/sandflake"
 	"golang.org/x/crypto/blake2b"
 	"within.website/ln"
 )
@@ -56,6 +56,7 @@ type Images interface {
 type stormImages struct {
 	db *storm.DB
 	r  *linkscraper.Rules
+	g  sandflake.Generator
 }
 
 func NewStormImages(db *storm.DB, r *linkscraper.Rules) Images {
@@ -72,7 +73,7 @@ func validContentType(ct string) bool {
 }
 
 func (s *stormImages) Insert(url string) (*Image, error) {
-	id := xid.New().String()
+	id := s.g.Next().String()
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -208,7 +209,7 @@ func (s *stormImages) Search(numPerPage, pageNumber int, tags []string) ([]Image
 
 func (s *stormImages) Recent(pageID int) ([]Image, error) {
 	var images []Image
-	err := s.db.AllByIndex("Added", &images, storm.Reverse(), storm.Limit(30), storm.Skip(30 * pageID))
+	err := s.db.AllByIndex("Added", &images, storm.Reverse(), storm.Limit(30), storm.Skip(30*pageID))
 	if err != nil {
 		return nil, err
 	}
